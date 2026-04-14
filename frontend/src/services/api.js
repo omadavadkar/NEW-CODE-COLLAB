@@ -1,9 +1,9 @@
 import axios from 'axios';
 
-const BASE_URL = import.meta.env.VITE_API_URL || 'http://127.0.0.1:5000';
+const API_URL = 'https://new-code-collab-4.onrender.com';
 
 export async function runCode(language, code) {
-  const response = await axios.post(`${BASE_URL}/run`, {
+  const response = await axios.post(`${API_URL}/run`, {
     language,
     code
   });
@@ -20,7 +20,7 @@ export async function uploadFolder(files) {
     formData.append('files', file, relativePath);
   });
 
-  const response = await axios.post(`${BASE_URL}/upload-folder`, formData, {
+  const response = await axios.post(`${API_URL}/upload-folder`, formData, {
     headers: {
       'Content-Type': 'multipart/form-data'
     }
@@ -30,7 +30,7 @@ export async function uploadFolder(files) {
 }
 
 export async function getWorkspaceFile(workspaceId, filePath) {
-  const response = await axios.get(`${BASE_URL}/workspace-file`, {
+  const response = await axios.get(`${API_URL}/workspace-file`, {
     params: {
       workspaceId,
       filePath
@@ -41,11 +41,11 @@ export async function getWorkspaceFile(workspaceId, filePath) {
 }
 
 export async function runPython(payload) {
-  const response = await axios.post(`${BASE_URL}/run-python`, payload);
+  const response = await axios.post(`${API_URL}/run-python`, payload);
   return response.data;
 }
 
 export async function installPackage(command) {
-  const response = await axios.post(`${BASE_URL}/install-package`, { command });
+  const response = await axios.post(`${API_URL}/install-package`, { command });
   return response.data;
 }
