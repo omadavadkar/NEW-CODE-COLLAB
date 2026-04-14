@@ -11,7 +11,7 @@ from services.workspace_store import WorkspaceStore, WorkspaceStoreError
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'code-collab-secret'
 CORS(app)
-socketio = SocketIO(app, cors_allowed_origins='*')
+socketio = SocketIO(app, cors_allowed_origins='*', async_mode='eventlet')
 
 room_store = RoomStore()
 code_store = CodeStore()
