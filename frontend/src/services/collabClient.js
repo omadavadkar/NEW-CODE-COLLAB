@@ -9,7 +9,7 @@ const API_URL =
 
 export function createCollabClient({ roomId, username, handlers }) {
   const socket = io(API_URL, {
-    transports: ['websocket']
+    transports: ['websocket', 'polling']
   });
 
   socket.on('connect', () => {
