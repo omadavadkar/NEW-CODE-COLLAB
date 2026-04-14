@@ -4,16 +4,98 @@ import ChatRoomPage from './components/ChatRoomPage';
 import EditorArea from './components/EditorArea';
 import ExplorerSidebar from './components/ExplorerSidebar';
 import TeamChatSidebar from './components/TeamChatSidebar';
-import { dummyFiles, editorTabs } from './data/dummyFiles';
-import { runCode } from './services/api';
+import { getWorkspaceFile, installPackage, runCode, runPython, uploadFolder } from './services/api';
 import { createCollabClient } from './services/collabClient';
 import { createWebRtcManager } from './services/webrtcService';
 
-const starterCode = {
-  python: "print('Hello from Code Collab')",
-  cpp: '#include <iostream>\nusing namespace std;\n\nint main() {\n  cout << "Hello from Code Collab" << endl;\n  return 0;\n}',
-  java: 'public class Main {\n  public static void main(String[] args) {\n    System.out.println("Hello from Code Collab");\n  }\n}'
+const starterFiles = {
+  'workspace/main.py': "print('Hello from Code Collab IDE')\n",
+  'workspace/app.js': "console.log('Code Collab: JavaScript file loaded.');\n",
+  'workspace/main.cpp': '#include <iostream>\n\nint main() {\n  std::cout << "Hello from Code Collab IDE" << std::endl;\n  return 0;\n}\n',
+  'workspace/Main.java':
+    'public class Main {\n  public static void main(String[] args) {\n    System.out.println("Hello from Code Collab IDE");\n  }\n}\n'
 };
+
+const starterTree = [
+  {
+    name: 'workspace',
+    type: 'folder',
+    path: 'workspace',
+    children: [
+      { name: 'main.py', type: 'file', path: 'workspace/main.py' },
+      { name: 'app.js', type: 'file', path: 'workspace/app.js' },
+      { name: 'main.cpp', type: 'file', path: 'workspace/main.cpp' },
+      { name: 'Main.java', type: 'file', path: 'workspace/Main.java' }
+    ]
+  }
+];
+
+const languageByExtension = {
+  py: 'python',
+  js: 'javascript',
+  jsx: 'javascript',
+  ts: 'javascript',
+  tsx: 'javascript',
+  cpp: 'cpp',
+  cxx: 'cpp',
+  cc: 'cpp',
+  h: 'cpp',
+  hpp: 'cpp',
+  java: 'java'
+};
+
+function normalizeRelativePath(path) {
+  return (path || '').replace(/\\/g, '/').replace(/^\/+/, '').trim();
+}
+
+function getLanguageFromPath(filePath) {
+  const extension = filePath?.split('.').pop()?.toLowerCase();
+  return languageByExtension[extension] || 'plaintext';
+}
+
+function countFiles(nodes) {
+  return nodes.reduce((total, node) => {
+    if (node.type === 'file') {
+      return total + 1;
+    }
+
+    return total + countFiles(node.children || []);
+  }, 0);
+}
+
+function getFirstFilePath(nodes) {
+  for (const node of nodes) {
+    if (node.type === 'file') {
+      return node.path;
+    }
+
+    const child = getFirstFilePath(node.children || []);
+    if (child) {
+      return child;
+    }
+  }
+
+  return '';
+}
+
+function parsePythonMarkers(stderr) {
+  const lineMatches = [...stderr.matchAll(/line\s+(\d+)/gi)];
+  if (!lineMatches.length) {
+    return [];
+  }
+
+  const uniqueLines = Array.from(new Set(lineMatches.map((match) => Number(match[1])))).filter((line) => Number.isFinite(line));
+  const summary = stderr.trim().split('\n').slice(-1)[0] || 'Runtime error';
+
+  return uniqueLines.map((line) => ({
+    startLineNumber: line,
+    startColumn: 1,
+    endLineNumber: line,
+    endColumn: 200,
+    message: summary,
+    severity: 8
+  }));
+}
 
 export default function App() {
   const [roomId, setRoomId] = useState('');
@@ -30,15 +112,22 @@ export default function App() {
     return generated;
   });
 
-  const [language, setLanguage] = useState('python');
-  const [code, setCode] = useState(starterCode.python);
-  const [activeTab, setActiveTab] = useState('main.py');
+  const [workspaceTree, setWorkspaceTree] = useState(starterTree);
+  const [workspaceId, setWorkspaceId] = useState('');
+  const [fileContents, setFileContents] = useState(starterFiles);
+  const [openTabs, setOpenTabs] = useState(['workspace/main.py']);
+  const [activeFilePath, setActiveFilePath] = useState('workspace/main.py');
   const [output, setOutput] = useState('Terminal ready. Click Run to execute code from backend.');
   const [debugOutput, setDebugOutput] = useState('Debug console initialized.');
   const [problemsOutput, setProblemsOutput] = useState('No problems detected.');
+  const [logsOutput, setLogsOutput] = useState('Workspace booted successfully.');
   const [panelTab, setPanelTab] = useState('Terminal');
+  const [terminalEntries, setTerminalEntries] = useState([{ id: 1, type: 'system', text: 'Terminal ready.', time: 'now' }]);
+  const [terminalCommand, setTerminalCommand] = useState('');
   const [chatInput, setChatInput] = useState('');
   const [isRunning, setIsRunning] = useState(false);
+  const [isRunningCommand, setIsRunningCommand] = useState(false);
+  const [isUploadingFolder, setIsUploadingFolder] = useState(false);
   const [isChatRoomOpen, setIsChatRoomOpen] = useState(false);
   const [users, setUsers] = useState([]);
   const [incomingInvite, setIncomingInvite] = useState(null);
@@ -47,19 +136,88 @@ export default function App() {
   const [callStatus, setCallStatus] = useState('No active call.');
   const [callParticipants, setCallParticipants] = useState([]);
   const [remoteStreams, setRemoteStreams] = useState([]);
+  const [editorMarkers, setEditorMarkers] = useState([]);
   const [messages, setMessages] = useState([{ id: 1, sender: 'System', text: 'Welcome to Code Collab chat.' }]);
 
   const mediaStreamRef = useRef(null);
   const collabClientRef = useRef(null);
   const webRtcManagerRef = useRef(null);
   const remoteCodeUpdateRef = useRef(false);
-  const tabs = useMemo(() => editorTabs, []);
+  const activeFilePathRef = useRef(activeFilePath);
+  const openTabsRef = useRef(openTabs);
+  const fileContentsRef = useRef(fileContents);
+  const localUploadedFilesRef = useRef(new Map());
+  const folderInputRef = useRef(null);
+
+  const fileCount = useMemo(() => countFiles(workspaceTree), [workspaceTree]);
+  const activeCode = activeFilePath ? fileContents[activeFilePath] ?? '' : '';
+  const activeLanguage = getLanguageFromPath(activeFilePath);
+
+  useEffect(() => {
+    activeFilePathRef.current = activeFilePath;
+  }, [activeFilePath]);
+
+  useEffect(() => {
+    openTabsRef.current = openTabs;
+  }, [openTabs]);
+
+  useEffect(() => {
+    fileContentsRef.current = fileContents;
+  }, [fileContents]);
+
+  useEffect(() => {
+    if (folderInputRef.current) {
+      folderInputRef.current.setAttribute('webkitdirectory', '');
+      folderInputRef.current.setAttribute('directory', '');
+    }
+  }, []);
 
   const getTimeLabel = () =>
     new Date().toLocaleTimeString([], {
       hour: '2-digit',
       minute: '2-digit'
     });
+
+  const appendTerminalEntry = (type, text) => {
+    setTerminalEntries((prev) => [
+      ...prev,
+      {
+        id: Date.now() + Math.random(),
+        type,
+        text,
+        time: getTimeLabel()
+      }
+    ]);
+  };
+
+  const ensureFileContent = async (filePath) => {
+    if (!filePath || fileContentsRef.current[filePath] !== undefined) {
+      return;
+    }
+
+    const localFile = localUploadedFilesRef.current.get(filePath);
+    if (localFile) {
+      const text = await localFile.text();
+      setFileContents((prev) => ({ ...prev, [filePath]: text }));
+      return;
+    }
+
+    if (workspaceId) {
+      const response = await getWorkspaceFile(workspaceId, filePath);
+      setFileContents((prev) => ({ ...prev, [filePath]: response.content || '' }));
+    }
+  };
+
+  useEffect(() => {
+    if (!activeFilePath) {
+      return;
+    }
+
+    ensureFileContent(activeFilePath).catch(() => {
+      setProblemsOutput(`Unable to open ${activeFilePath}. File may be binary or unavailable.`);
+      setPanelTab('Problems');
+    });
+  }, [activeFilePath, workspaceId]);
 
   const startLocalMedia = async () => {
     if (mediaStreamRef.current) {
@@ -118,15 +276,14 @@ export default function App() {
           setUsers(nextUsers);
         },
         onCodeSync: (nextCode) => {
-          if (!nextCode) {
-            return;
-          }
+          const targetFile = activeFilePathRef.current || openTabsRef.current[0] || 'workspace/main.py';
           remoteCodeUpdateRef.current = true;
-          setCode(nextCode);
+          setFileContents((prev) => ({ ...prev, [targetFile]: nextCode || '' }));
         },
         onCodeChange: (nextCode) => {
+          const targetFile = activeFilePathRef.current || openTabsRef.current[0] || 'workspace/main.py';
           remoteCodeUpdateRef.current = true;
-          setCode(nextCode);
+          setFileContents((prev) => ({ ...prev, [targetFile]: nextCode || '' }));
         },
         onMessage: (message) => {
           setMessages((prev) => [...prev, { ...message, timestamp: message.timestamp || getTimeLabel() }]);
@@ -145,7 +302,7 @@ export default function App() {
         onCallInvite: (payload) => {
           setIncomingInvite(payload);
           setCallStatus(`Incoming call from ${payload.fromUsername}. Accept or Reject.`);
-          setPanelTab('Debug Console');
+          setPanelTab('Logs');
         },
         onCallAccept: async (payload) => {
           const manager = ensureWebRtcManager();
@@ -227,6 +384,7 @@ export default function App() {
     setIsMicOn(false);
     setCallParticipants([]);
     setRemoteStreams([]);
+    setEditorMarkers([]);
     setMessages([{ id: Date.now(), sender: 'System', text: `Joined room ${normalized}`, timestamp: getTimeLabel() }]);
     setCallStatus('No active call.');
     setRoomId(normalized);
@@ -239,44 +397,231 @@ export default function App() {
     joinRoom(generated);
   };
 
+  const handleOpenFile = (filePath) => {
+    setActiveFilePath(filePath);
+    setOpenTabs((prev) => (prev.includes(filePath) ? prev : [...prev, filePath]));
+    ensureFileContent(filePath).catch(() => {
+      setProblemsOutput(`Unable to read ${filePath}.`);
+      setPanelTab('Problems');
+    });
+  };
+
+  const handleCloseTab = (tabPath) => {
+    setOpenTabs((prev) => {
+      const nextTabs = prev.filter((tab) => tab !== tabPath);
+      if (tabPath === activeFilePath) {
+        setActiveFilePath(nextTabs[nextTabs.length - 1] || '');
+      }
+      return nextTabs;
+    });
+  };
+
+  const handleFolderUpload = async (incomingFiles) => {
+    const files = Array.from(incomingFiles || []);
+    if (!files.length) {
+      return;
+    }
+
+    const entries = files
+      .map((file) => {
+        const relativePath = normalizeRelativePath(file.webkitRelativePath || file.name);
+        return relativePath ? { file, relativePath } : null;
+      })
+      .filter(Boolean);
+
+    if (!entries.length) {
+      setProblemsOutput('No valid files detected in selected folder upload.');
+      setPanelTab('Problems');
+      return;
+    }
+
+    setIsUploadingFolder(true);
+    appendTerminalEntry('command', '$ upload-folder');
+    try {
+      const payload = await uploadFolder(entries);
+      const localFileMap = new Map();
+      entries.forEach((entry) => {
+        localFileMap.set(entry.relativePath, entry.file);
+      });
+      localUploadedFilesRef.current = localFileMap;
+
+      setWorkspaceId(payload.workspaceId || '');
+      setWorkspaceTree(payload.tree || []);
+      setFileContents({});
+      setOpenTabs([]);
+      setActiveFilePath('');
+      setEditorMarkers([]);
+
+      const firstFile = getFirstFilePath(payload.tree || []);
+      if (firstFile) {
+        setOpenTabs([firstFile]);
+        setActiveFilePath(firstFile);
+      }
+
+      const uploadedCount = payload.fileCount || entries.length;
+      setLogsOutput(`Uploaded ${uploadedCount} files to temporary workspace ${payload.workspaceId}.`);
+      setDebugOutput(`Folder uploaded at ${getTimeLabel()} and structure parsed by backend.`);
+      setProblemsOutput('No problems detected.');
+      appendTerminalEntry('success', `Workspace upload completed (${uploadedCount} files).`);
+    } catch (error) {
+      const message = error.response?.data?.error || 'Folder upload failed. Check backend server.';
+      setProblemsOutput(message);
+      setPanelTab('Problems');
+      appendTerminalEntry('error', message);
+    } finally {
+      setIsUploadingFolder(false);
+    }
+  };
+
   const handleRun = async () => {
+    if (!activeFilePath) {
+      setProblemsOutput('Select a file before executing code.');
+      setPanelTab('Problems');
+      return;
+    }
+
     setIsRunning(true);
+    setEditorMarkers([]);
     try {
       setOutput('Running...');
-      setDebugOutput(`Executing ${language.toUpperCase()} code in room ${roomId}...`);
-      const response = await runCode(language, code);
+      setDebugOutput(`Executing ${activeLanguage.toUpperCase()} code in room ${roomId || 'local'}...`);
+      appendTerminalEntry('command', `$ run ${activeFilePath}`);
+
+      let response;
+      if (activeLanguage === 'python') {
+        response = await runPython({
+          code: activeCode,
+          workspaceId,
+          filePath: activeFilePath,
+          timeout: 8
+        });
+      } else if (activeLanguage === 'cpp' || activeLanguage === 'java') {
+        response = await runCode(activeLanguage, activeCode);
+      } else {
+        const warning = 'Execution is enabled for Python/C++/Java. JavaScript is currently editor-only.';
+        setOutput(warning);
+        setProblemsOutput(warning);
+        setPanelTab('Problems');
+        appendTerminalEntry('error', warning);
+        return;
+      }
+
       if (response.error) {
         setOutput(response.error);
         setProblemsOutput(response.error);
         setPanelTab('Problems');
+        appendTerminalEntry('error', response.error);
         return;
       }
 
       const renderedOutput = response.stderr
         ? `${response.stdout || ''}\n${response.stderr}`.trim()
         : response.stdout || 'Program executed with no output.';
+
       setOutput(renderedOutput);
       setDebugOutput(`Execution finished at ${new Date().toLocaleTimeString()}`);
+      setLogsOutput(`Executed ${activeFilePath} with exit code ${response.returncode ?? 0}.`);
       setProblemsOutput(response.stderr ? 'Runtime/compile warnings found. Check Output.' : 'No problems detected.');
-      setPanelTab('Output');
+      appendTerminalEntry(response.stderr ? 'error' : 'success', renderedOutput);
+
+      if (response.stderr && activeLanguage === 'python') {
+        setEditorMarkers(parsePythonMarkers(response.stderr));
+      }
+
+      setPanelTab(response.stderr ? 'Problems' : 'Output');
     } catch (error) {
       const message = error.response?.data?.error || 'Execution failed. Check backend server.';
       setOutput(message);
       setProblemsOutput(message);
       setDebugOutput(`Execution request failed at ${new Date().toLocaleTimeString()}`);
       setPanelTab('Problems');
+      appendTerminalEntry('error', message);
     } finally {
       setIsRunning(false);
     }
   };
 
   const handleEditorCodeChange = (nextCode) => {
-    setCode(nextCode);
+    if (!activeFilePath) {
+      return;
+    }
+
+    setFileContents((prev) => ({ ...prev, [activeFilePath]: nextCode }));
     if (remoteCodeUpdateRef.current) {
       remoteCodeUpdateRef.current = false;
       return;
     }
     collabClientRef.current?.sendCodeChange(nextCode);
+  };
+
+  const handleRunTerminalCommand = async () => {
+    const command = terminalCommand.trim();
+    if (!command) {
+      return;
+    }
+
+    setTerminalCommand('');
+    appendTerminalEntry('command', `$ ${command}`);
+    setIsRunningCommand(true);
+
+    try {
+      if (/^pip\s+install\s+/i.test(command)) {
+        const response = await installPackage(command);
+        const rendered = `${response.stdout || ''}\n${response.stderr || ''}`.trim() || 'pip finished with no output.';
+        setOutput(rendered);
+        setLogsOutput(`Package command completed with exit code ${response.returncode ?? 0}.`);
+        setPanelTab('Output');
+        appendTerminalEntry(response.returncode === 0 ? 'success' : 'error', rendered);
+        if (response.returncode !== 0) {
+          setProblemsOutput(rendered);
+          setPanelTab('Problems');
+        }
+        return;
+      }
+
+      if (/^python(\s+.*)?$/i.test(command)) {
+        const requestedFile = normalizeRelativePath(command.replace(/^python\s*/i, ''));
+        const targetFile = requestedFile || activeFilePath;
+
+        if (!targetFile) {
+          throw new Error('No Python file is active. Open a .py file first.');
+        }
+
+        if (!targetFile.endsWith('.py')) {
+          throw new Error('Only Python files can run from terminal command mode.');
+        }
+
+        await ensureFileContent(targetFile);
+        const sourceCode = fileContentsRef.current[targetFile] ?? '';
+
+        const response = await runPython({
+          code: sourceCode,
+          workspaceId,
+          filePath: targetFile,
+          timeout: 8
+        });
+
+        const rendered = `${response.stdout || ''}\n${response.stderr || ''}`.trim() || 'Python execution completed with no output.';
+        setOutput(rendered);
+        setLogsOutput(`Terminal executed ${targetFile} with exit code ${response.returncode ?? 0}.`);
+        setPanelTab(response.stderr ? 'Problems' : 'Output');
+        appendTerminalEntry(response.stderr ? 'error' : 'success', rendered);
+        if (response.stderr) {
+          setEditorMarkers(parsePythonMarkers(response.stderr));
+          setProblemsOutput(rendered);
+        }
+        return;
+      }
+
+      throw new Error('Allowed commands: pip install <package>, python [file.py]');
+    } catch (error) {
+      const message = error.response?.data?.error || error.message || 'Terminal command failed.';
+      setProblemsOutput(message);
+      setPanelTab('Problems');
+      appendTerminalEntry('error', message);
+    } finally {
+      setIsRunningCommand(false);
+    }
   };
 
   const handleSendMessage = () => {
@@ -313,7 +658,7 @@ export default function App() {
       ensureWebRtcManager();
       setCallStatus('Call started. Camera and mic access granted.');
       setDebugOutput('Video call established and local media stream started.');
-      setPanelTab('Debug Console');
+      setPanelTab('Logs');
       collabClientRef.current?.startCall(true);
       collabClientRef.current?.inviteCall();
       setIncomingInvite(null);
@@ -357,7 +702,7 @@ export default function App() {
     setRemoteStreams([]);
     setCallStatus('Call ended.');
     setDebugOutput('Video call ended and media tracks stopped.');
-    setPanelTab('Debug Console');
+    setPanelTab('Logs');
     collabClientRef.current?.leaveCall();
   };
 
@@ -373,7 +718,7 @@ export default function App() {
       collabClientRef.current?.startCall(true);
       collabClientRef.current?.acceptCall(incomingInvite.fromSid);
       setIncomingInvite(null);
-      setPanelTab('Debug Console');
+      setPanelTab('Logs');
     } catch (error) {
       setCallStatus('Call accept failed. Camera/mic permission denied.');
       setProblemsOutput(error.message || 'Could not accept call invite.');
@@ -394,11 +739,11 @@ export default function App() {
   const panelContent = {
     Problems: problemsOutput,
     Output: output,
-    'Debug Console': debugOutput,
-    Terminal: output
+    Logs: `${logsOutput}\n${debugOutput}`
   };
 
   const isTyping = chatInput.trim().length > 0;
+  const canRunFromEditor = activeFilePath && ['python', 'cpp', 'java'].includes(activeLanguage);
 
   const copyRoomId = async () => {
     if (!roomId) {
@@ -406,78 +751,87 @@ export default function App() {
     }
     await navigator.clipboard.writeText(roomId);
     setDebugOutput('Room ID copied to clipboard.');
-    setPanelTab('Debug Console');
+    setPanelTab('Logs');
   };
 
   return (
-    <main className="h-screen overflow-hidden bg-[radial-gradient(circle_at_5%_5%,#0e7490_0%,#020617_45%,#020617_100%)] p-4 text-slate-100">
-      <header className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-white/10 bg-white/5 px-4 py-3 shadow-xl backdrop-blur-xl">
-        <div className="flex items-center gap-3">
-          <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-gradient-to-br from-cyan-400 to-blue-600 font-bold text-slate-950">CC</div>
-          <div>
-            <p className="text-lg font-semibold tracking-wide">Code Collab</p>
-            <p className="text-xs text-slate-400">Collaboration-first coding workspace</p>
-          </div>
-        </div>
+    <main className="flex h-screen flex-col overflow-hidden bg-[#111111] text-slate-100">
+      <input
+        ref={folderInputRef}
+        type="file"
+        className="hidden"
+        multiple
+        onChange={(event) => {
+          handleFolderUpload(event.target.files);
+          event.target.value = '';
+        }}
+      />
 
-        <div className="flex flex-wrap items-center gap-2">
-          <div className="rounded-xl border border-cyan-400/30 bg-cyan-500/10 px-3 py-1 text-sm text-cyan-100">Room: {roomId || 'Not joined'}</div>
-          <button
-            type="button"
-            onClick={copyRoomId}
-            className="rounded-xl border border-white/20 bg-white/10 px-3 py-1 text-sm transition hover:bg-white/20"
-          >
-            Copy Room ID
-          </button>
-        </div>
-
-        <div className="flex items-center gap-2">
-          <div className="flex h-10 w-10 items-center justify-center rounded-full bg-gradient-to-br from-indigo-400 to-cyan-400 text-sm font-semibold text-slate-950">
-            {username.slice(0, 2).toUpperCase()}
+      <header className="border-b border-[#2a2d2e] bg-[#181818] px-4 py-3">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <div className="flex h-10 w-10 items-center justify-center rounded bg-[#007acc] font-bold text-white">CC</div>
+            <div>
+              <p className="text-lg font-semibold tracking-wide">Code Collab</p>
+              <p className="text-xs text-slate-400">Collaborative browser IDE with Python backend runtime</p>
+            </div>
           </div>
-          <p className="text-sm text-slate-200">{username}</p>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <input
+              value={roomInput}
+              onChange={(event) => setRoomInput(event.target.value)}
+              placeholder="Room ID"
+              className="rounded border border-[#3a3d41] bg-[#252526] px-3 py-1.5 text-sm outline-none focus:border-sky-500"
+            />
+            <button
+              type="button"
+              onClick={() => joinRoom(roomInput)}
+              className="rounded border border-sky-500/40 bg-sky-500/15 px-3 py-1.5 text-sm text-sky-100 transition hover:bg-sky-500/25"
+            >
+              Join Room
+            </button>
+            <button
+              type="button"
+              onClick={handleCreateRoom}
+              className="rounded border border-[#3a3d41] bg-[#252526] px-3 py-1.5 text-sm transition hover:border-slate-400"
+            >
+              Create Room
+            </button>
+            <button
+              type="button"
+              onClick={copyRoomId}
+              className="rounded border border-[#3a3d41] bg-[#252526] px-3 py-1.5 text-sm transition hover:border-slate-400"
+            >
+              Copy Room
+            </button>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <div className="rounded border border-[#3a3d41] bg-[#252526] px-3 py-1 text-xs text-slate-300">{roomId || 'Not joined'}</div>
+            <div className="flex h-8 w-8 items-center justify-center rounded-full bg-slate-700 text-xs font-semibold text-slate-100">
+              {username.slice(0, 2).toUpperCase()}
+            </div>
+            <p className="text-sm text-slate-300">{username}</p>
+          </div>
         </div>
       </header>
 
-      <div className="mb-3 flex flex-wrap items-center gap-2 rounded-2xl border border-white/10 bg-slate-900/50 px-3 py-3 backdrop-blur-xl">
-        <input
-          value={roomInput}
-          onChange={(event) => setRoomInput(event.target.value)}
-          placeholder="Enter room id"
-          className="rounded-xl border border-white/20 bg-slate-800/80 px-3 py-2 text-sm"
-        />
-        <button
-          type="button"
-          onClick={() => joinRoom(roomInput)}
-          className="rounded-xl bg-gradient-to-r from-cyan-500 to-blue-500 px-4 py-2 text-sm font-semibold transition hover:scale-[1.02]"
-        >
-          Join Room
-        </button>
-        <button
-          type="button"
-          onClick={handleCreateRoom}
-          className="rounded-xl bg-gradient-to-r from-fuchsia-500 to-indigo-500 px-4 py-2 text-sm font-semibold transition hover:scale-[1.02]"
-        >
-          Create Room
-        </button>
-        <span className="text-sm text-slate-300">Current: {roomId || 'Not joined'}</span>
-      </div>
-
       {incomingInvite ? (
-        <div className="mb-3 flex items-center justify-between rounded-2xl border border-amber-400/40 bg-amber-900/20 px-3 py-2 backdrop-blur-xl">
-          <span className="text-sm">Incoming call from {incomingInvite.fromUsername}</span>
+        <div className="flex items-center justify-between border-b border-amber-500/30 bg-amber-500/10 px-4 py-2 text-sm">
+          <span>Incoming call from {incomingInvite.fromUsername}</span>
           <div className="flex gap-2">
             <button
               type="button"
               onClick={handleAcceptInvite}
-              className="rounded bg-emerald-600 px-3 py-1 text-sm font-semibold hover:bg-emerald-500"
+              className="rounded border border-emerald-500/40 bg-emerald-500/15 px-3 py-1 text-emerald-200"
             >
               Accept
             </button>
             <button
               type="button"
               onClick={handleRejectInvite}
-              className="rounded bg-rose-600 px-3 py-1 text-sm font-semibold hover:bg-rose-500"
+              className="rounded border border-rose-500/40 bg-rose-500/15 px-3 py-1 text-rose-200"
             >
               Reject
             </button>
@@ -485,70 +839,101 @@ export default function App() {
         </div>
       ) : null}
 
-      {!isJoinedRoom ? (
-        <div className="grid h-[calc(100vh-210px)] place-items-center rounded-3xl border border-white/10 bg-white/5 backdrop-blur-xl">
-          <div className="text-center">
-            <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-gradient-to-br from-cyan-500 to-blue-600 text-2xl font-bold text-slate-950">
-              <span>{'</>'}</span>
+      <div className="min-h-0 flex-1">
+        {!isJoinedRoom ? (
+          <div className="grid h-full place-items-center bg-[#111111]">
+            <div className="max-w-xl rounded border border-[#2a2d2e] bg-[#181818] p-8 text-center">
+              <h2 className="text-2xl font-semibold">Join or create a room to start collaboration</h2>
+              <p className="mt-2 text-slate-400">
+                Real-time code sync, developer-grade editor, package management, and built-in team video.
+              </p>
             </div>
-            <h2 className="text-2xl font-semibold">Join or create a room to start collaborating</h2>
-            <p className="mt-2 text-slate-400">Real-time code, team presence, and chat are waiting for you.</p>
           </div>
-        </div>
-      ) : isChatRoomOpen ? (
-      <ChatRoomPage
-        roomId={roomId}
-        username={username}
-        messages={messages}
-        chatInput={chatInput}
-        setChatInput={setChatInput}
-        onSend={handleSendMessage}
-        isTyping={isTyping}
-        onBack={() => setIsChatRoomOpen(false)}
-      />
-      ) : (
-      <div className="grid h-[calc(100vh-210px)] min-h-0 grid-cols-12 grid-rows-[1fr_1fr_210px] overflow-hidden rounded-3xl border border-white/10 shadow-2xl">
-        <ExplorerSidebar files={dummyFiles} />
-        <EditorArea
-          roomId={roomId || 'Not joined'}
-          username={username}
-          users={users}
-          language={language}
-          setLanguage={(nextLanguage) => {
-            setLanguage(nextLanguage);
-            setCode(starterCode[nextLanguage]);
-          }}
-          code={code}
-          setCode={handleEditorCodeChange}
-          tabs={tabs}
-          activeTab={activeTab}
-          setActiveTab={setActiveTab}
-          onRun={handleRun}
-          isRunning={isRunning}
-        />
-        <TeamChatSidebar
-          username={username}
-          users={users}
-          callParticipants={callParticipants}
-          inCall={inCall}
-          isMicOn={isMicOn}
-          localStream={mediaStreamRef.current}
-          remoteStreams={remoteStreams}
-          callStatus={callStatus}
-          isTyping={isTyping}
-          onOpenChatRoom={() => setIsChatRoomOpen(true)}
-          onVideo={handleStartVideo}
-          onMic={handleToggleMic}
-          onEndCall={handleEndCall}
-        />
-        <BottomPanel
-          tab={panelTab}
-          setTab={setPanelTab}
-          contentByTab={panelContent}
-          panelClassName="col-span-9 row-span-1"
-        />
+        ) : isChatRoomOpen ? (
+          <div className="h-full p-4">
+            <ChatRoomPage
+              roomId={roomId}
+              username={username}
+              messages={messages}
+              chatInput={chatInput}
+              setChatInput={setChatInput}
+              onSend={handleSendMessage}
+              isTyping={isTyping}
+              onBack={() => setIsChatRoomOpen(false)}
+            />
+          </div>
+        ) : (
+          <div className="grid h-full min-h-0 grid-cols-[minmax(210px,16%)_minmax(0,1fr)_minmax(300px,24%)] grid-rows-[minmax(0,1fr)_230px]">
+            <ExplorerSidebar
+              files={workspaceTree}
+              activeFilePath={activeFilePath}
+              onSelectFile={handleOpenFile}
+              onUploadClick={() => folderInputRef.current?.click()}
+              onFolderDrop={handleFolderUpload}
+              isUploading={isUploadingFolder}
+              workspaceId={workspaceId}
+            />
+
+            <EditorArea
+              roomId={roomId || 'Not joined'}
+              username={username}
+              users={users}
+              language={activeLanguage}
+              code={activeCode}
+              setCode={handleEditorCodeChange}
+              openTabs={openTabs}
+              activeFilePath={activeFilePath}
+              onSelectTab={handleOpenFile}
+              onCloseTab={handleCloseTab}
+              onRun={handleRun}
+              isRunning={isRunning}
+              markers={editorMarkers}
+              isRunDisabled={!canRunFromEditor}
+              runLabel={activeLanguage === 'python' ? 'Run Python' : 'Run Code'}
+            />
+
+            <TeamChatSidebar
+              username={username}
+              users={users}
+              callParticipants={callParticipants}
+              inCall={inCall}
+              isMicOn={isMicOn}
+              localStream={mediaStreamRef.current}
+              remoteStreams={remoteStreams}
+              callStatus={callStatus}
+              isTyping={isTyping}
+              onOpenChatRoom={() => setIsChatRoomOpen(true)}
+              onVideo={handleStartVideo}
+              onMic={handleToggleMic}
+              onEndCall={handleEndCall}
+            />
+
+            <BottomPanel
+              tab={panelTab}
+              setTab={setPanelTab}
+              contentByTab={panelContent}
+              terminalEntries={terminalEntries}
+              terminalCommand={terminalCommand}
+              setTerminalCommand={setTerminalCommand}
+              onRunCommand={handleRunTerminalCommand}
+              isRunningCommand={isRunningCommand}
+            />
+          </div>
+        )}
       </div>
-      )}
+
+      <footer className="flex items-center justify-between border-t border-[#1f5f8b] bg-[#007acc] px-4 py-1.5 text-xs text-white">
+        <div className="flex items-center gap-4">
+          <span>Workspace: {workspaceId || 'local'}</span>
+          <span>Files: {fileCount}</span>
+          <span>Users: {users.length || 1}</span>
+        </div>
+        <div className="flex items-center gap-4">
+          <span>Active: {activeFilePath || 'none'}</span>
+          <span>Language: {activeLanguage}</span>
+          <span>Room: {roomId || 'not-joined'}</span>
+        </div>
+      </footer>
     </main>
   );
 }

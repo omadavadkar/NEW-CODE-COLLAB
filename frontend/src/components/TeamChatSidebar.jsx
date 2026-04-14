@@ -99,15 +99,17 @@ export default function TeamChatSidebar({
   onEndCall,
   onOpenChatRoom
 }) {
+  const hasAnyVideoStream = Boolean(localStream) || Boolean(remoteStreams?.length);
+
   return (
-    <aside className="scrollbar-thin col-span-3 row-span-3 flex h-full min-h-0 flex-col overflow-y-auto overflow-x-hidden rounded-r-2xl border-l border-white/10 bg-white/5 backdrop-blur-xl">
-      <div className="flex items-center justify-between border-b border-white/10 px-4 py-3">
-        <h2 className="text-xl font-semibold text-slate-100">Team Sync</h2>
+    <aside className="scrollbar-thin col-span-1 row-span-2 flex h-full min-h-0 min-w-[300px] flex-col overflow-y-auto overflow-x-hidden border-l border-[#2a2d2e] bg-[#181818]">
+      <div className="flex items-center justify-between border-b border-[#2a2d2e] px-4 py-3">
+        <h2 className="text-sm font-semibold uppercase tracking-[0.14em] text-slate-200">Collaboration</h2>
         <div className="flex gap-2 text-xs">
           <button
             type="button"
             onClick={onVideo}
-            className="flex items-center gap-1 rounded-xl bg-white/10 px-2.5 py-1.5 transition hover:bg-white/20"
+            className="flex items-center gap-1 rounded border border-[#3a3d41] bg-[#252526] px-2.5 py-1.5 text-slate-300 transition hover:border-sky-500 hover:text-sky-200"
           >
             <CameraIcon />
             <span>{inCall ? 'In Call' : 'Video'}</span>
@@ -115,7 +117,7 @@ export default function TeamChatSidebar({
           <button
             type="button"
             onClick={onMic}
-            className="flex items-center gap-1 rounded-xl bg-white/10 px-2.5 py-1.5 transition hover:bg-white/20"
+            className="flex items-center gap-1 rounded border border-[#3a3d41] bg-[#252526] px-2.5 py-1.5 text-slate-300 transition hover:border-sky-500 hover:text-sky-200"
           >
             {isMicOn ? <MicOnIcon /> : <MicOffIcon />}
             <span>{isMicOn ? 'Mic On' : 'Mic Off'}</span>
@@ -123,7 +125,7 @@ export default function TeamChatSidebar({
           <button
             type="button"
             onClick={onEndCall}
-            className="flex items-center gap-1 rounded-xl bg-rose-500/90 px-2.5 py-1.5 transition hover:bg-rose-500"
+            className="flex items-center gap-1 rounded border border-rose-500/40 bg-rose-500/15 px-2.5 py-1.5 text-rose-200 transition hover:bg-rose-500/25"
           >
             <EndCallIcon />
             <span>End</span>
@@ -131,25 +133,30 @@ export default function TeamChatSidebar({
         </div>
       </div>
 
-      <div className="shrink-0 border-b border-white/10 px-4 py-3">
-        <h3 className="mb-2 text-xs font-bold tracking-[0.18em] text-slate-400">CALL STATUS</h3>
-        <p className="rounded-xl border border-white/10 bg-slate-800/70 p-2 text-sm text-slate-200">{callStatus}</p>
+      <div className="shrink-0 border-b border-[#2a2d2e] px-4 py-3">
+        <h3 className="mb-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Call Status</h3>
+        <p className="rounded border border-[#3a3d41] bg-[#252526] p-2 text-sm text-slate-200">{callStatus}</p>
         <div className="flex flex-wrap justify-start gap-2">
           <LocalPreview stream={localStream} />
           {remoteStreams?.map((remote) => (
             <RemotePreviewTile key={remote.sid} stream={remote.stream} username={remote.username} />
           ))}
+          {!hasAnyVideoStream ? (
+            <div className="mt-2 rounded border border-dashed border-[#3a3d41] bg-[#1f1f1f] px-3 py-2 text-xs text-slate-400">
+              Video preview appears here once a call starts.
+            </div>
+          ) : null}
         </div>
       </div>
 
-      <div className="shrink-0 border-b border-white/10 px-4 py-3">
-        <h3 className="mb-2 text-xs font-bold tracking-[0.18em] text-slate-400">TEAM PRESENCE</h3>
+      <div className="shrink-0 border-b border-[#2a2d2e] px-4 py-3">
+        <h3 className="mb-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Team Presence</h3>
         {users.length ? (
           <div className="space-y-2">
             {users.map((user) => (
-              <div key={user.sid} className="flex items-center justify-between rounded-xl border border-white/10 bg-slate-800/70 p-2 text-sm transition hover:-translate-y-0.5 hover:bg-slate-700/80">
+              <div key={user.sid} className="flex items-center justify-between rounded border border-[#3a3d41] bg-[#252526] p-2 text-sm transition hover:border-slate-500">
                 <div className="flex items-center gap-2">
-                  <div className="flex h-8 w-8 items-center justify-center rounded-full bg-gradient-to-br from-cyan-500 to-blue-600 text-xs font-semibold">
+                  <div className="flex h-8 w-8 items-center justify-center rounded-full bg-slate-700 text-xs font-semibold text-slate-100">
                     {user.username.slice(0, 2).toUpperCase()}
                   </div>
                   <div>
@@ -170,7 +177,7 @@ export default function TeamChatSidebar({
         <button
           type="button"
           onClick={onOpenChatRoom}
-          className="w-full rounded-2xl bg-gradient-to-r from-cyan-500 to-blue-500 px-4 py-3 text-sm font-semibold text-white shadow-lg transition hover:scale-[1.02]"
+          className="w-full rounded border border-[#3a3d41] bg-[#252526] px-4 py-3 text-sm font-semibold text-slate-200 transition hover:border-sky-500 hover:text-sky-200"
         >
           Open ChatRoom
         </button>

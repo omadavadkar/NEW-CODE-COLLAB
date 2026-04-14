@@ -1,47 +1,96 @@
 # Code Collab
 
-A full-stack real-time collaborative coding platform with a VS Code-inspired interface.
+Code Collab is a browser-based collaborative coding platform with a professional VS Code-like interface, real-time room collaboration, Monaco editor, Python runtime execution, package installation flow, and integrated team video calling.
 
-## Tech Stack
+## Stack
 
-- Frontend: React (Vite), Tailwind CSS, Monaco Editor
-- Backend: Flask, Flask-SocketIO
-- Execution: Python subprocess with 3-second timeout and temporary file cleanup
+- Frontend: React + Vite + Tailwind + Monaco Editor
+- Backend: Flask + Flask-CORS + Flask-SocketIO
+- Runtime: Python subprocess execution with timeout and command safety checks
 
-## Project Structure
+## Core IDE Features
 
-```text
-code-collab/
-  frontend/
-    index.html
-    package.json
-    postcss.config.js
-    tailwind.config.js
-    vite.config.js
-    src/
-      App.jsx
-      index.css
-      main.jsx
-      components/
-        BottomPanel.jsx
-        EditorArea.jsx
-        ExplorerSidebar.jsx
-        TeamChatSidebar.jsx
-      data/
-        dummyFiles.js
-      services/
-        api.js
-  backend/
-    app.py
-    requirements.txt
-    services/
-      executor.py
-      room_store.py
+- VS Code-inspired dark workspace layout
+- Left Explorer with nested folders, active file highlight, and file icons
+- Center Monaco editor with multi-file tabs and syntax highlighting (Python, JavaScript, C++, Java)
+- Bottom dock with Terminal, Output, Problems, and Logs
+- Right collaboration panel with room members + existing video calling flow
+- Drag-and-drop folder upload and folder picker upload
+- Status bar with workspace/runtime details
+
+## Video Calling
+
+The existing room-based video calling flow is preserved and continues to use the same Socket.IO + WebRTC signaling path.
+
+## Backend Routes
+
+### `POST /upload-folder`
+
+Uploads a folder from the client as multipart files and stores it in temporary backend workspace storage.
+
+Response includes:
+
+- `workspaceId`
+- `tree` (nested file/folder structure)
+- `fileCount`
+
+### `GET /workspace-file`
+
+Fetches UTF-8 text content for a file in a previously uploaded workspace.
+
+Query params:
+
+- `workspaceId`
+- `filePath`
+
+### `POST /run-python`
+
+Runs Python safely via subprocess in isolated mode.
+
+Accepts either inline code or workspace file reference.
+
+```json
+{
+  "code": "print('hello')",
+  "workspaceId": "optional",
+  "filePath": "optional",
+  "timeout": 8
+}
 ```
 
-## Setup Instructions
+Returns:
 
-### 1. Backend setup
+- `stdout`
+- `stderr`
+- `returncode`
+
+### `POST /install-package`
+
+Runs safe package install commands (pip install only).
+
+```json
+{
+  "command": "pip install flask"
+}
+```
+
+Returns command logs in `stdout`/`stderr`.
+
+### Existing compatibility route
+
+- `POST /run` remains available for Python/C++/Java snippet execution.
+
+## Safety Controls
+
+- Only controlled command families are accepted for package install (`pip install ...`)
+- Install flags are blocked for safety
+- Command timeout limits are enforced
+- Uploaded paths are sanitized to prevent traversal
+- Temporary workspace directories are managed and capped
+
+## Run Instructions
+
+### 1. Backend
 
 ```bash
 cd backend
@@ -52,11 +101,11 @@ pip install -r requirements.txt
 python app.py
 ```
 
-Backend runs on `http://127.0.0.1:5000`.
+Backend starts at `http://127.0.0.1:5000`.
 
-### 2. Frontend setup
+### 2. Frontend
 
-Open a new terminal:
+Open a second terminal:
 
 ```bash
 cd frontend
@@ -64,62 +113,21 @@ npm install
 npm run dev
 ```
 
-Frontend runs on `http://127.0.0.1:5173`.
+Frontend starts at `http://127.0.0.1:5173`.
 
-### 3. WebRTC ICE server setup (optional but recommended)
+## Optional Environment Configuration
 
-Create `frontend/.env` and configure ICE servers:
+Create `frontend/.env` if needed:
 
 ```env
 VITE_API_URL=http://127.0.0.1:5000
 VITE_ICE_SERVERS_JSON=[{"urls":"stun:stun.l.google.com:19302"}]
 ```
 
-Example including TURN:
+## Quick Verify
 
-```env
-VITE_ICE_SERVERS_JSON=[{"urls":"stun:stun.l.google.com:19302"},{"urls":"turn:your-turn-server:3478","username":"turn-user","credential":"turn-password"}]
-```
-
-## API
-
-### POST /run
-
-Request body:
-
-```json
-{
-  "language": "python",
-  "code": "print('hello')"
-}
-```
-
-Supported `language` values:
-
-- `python`
-- `cpp`
-- `java`
-
-## WebSocket Events
-
-- `join_room`
-- `code_change`
-- `send_message`
-- `user_join`
-- `user_leave`
-
-Additional call/WebRTC events:
-
-- `call_invite`
-- `call_accept`
-- `call_reject`
-- `webrtc_offer`
-- `webrtc_answer`
-- `webrtc_ice_candidate`
-- `call_ended`
-
-## Notes
-
-- The frontend is intentionally UI-focused and communicates through API calls.
-- Backend owns room management, code sync, chat broadcasting, and code execution.
-- Code execution enforces a 3-second timeout and removes temporary artifacts after each run.
+1. Join or create a room.
+2. Upload a folder from Explorer.
+3. Open a `.py` file and run it.
+4. Run terminal command: `pip install flask`.
+5. Open collaboration panel and start video call with another user in the same room.
