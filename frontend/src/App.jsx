@@ -638,7 +638,10 @@ export default function App() {
       return;
     }
 
-    if (users.length < 2) {
+    const hasSelfInRoster = users.some((user) => user.username === username);
+    const totalUsers = hasSelfInRoster ? users.length : users.length + 1;
+
+    if (totalUsers < 2) {
       setCallStatus('Your friend must join the same room before starting a call.');
       setProblemsOutput('Need at least 2 users in the same room for video call.');
       setPanelTab('Problems');
