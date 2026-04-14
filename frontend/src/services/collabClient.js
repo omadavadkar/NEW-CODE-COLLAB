@@ -1,6 +1,6 @@
 import { io } from 'socket.io-client';
 
-const API_URL = 'https://new-code-collab-8.onrender.com';
+const API_URL = 'https://new-code-collab-10.onrender.com';
 
 export function createCollabClient({ roomId, username, handlers }) {
   const socket = io(API_URL, {
