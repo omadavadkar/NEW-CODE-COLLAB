@@ -1,6 +1,11 @@
 import axios from 'axios';
 
-const API_URL = 'https://new-code-collab-4.onrender.com';
+const LOCAL_URL = 'http://127.0.0.1:5000';
+const DEPLOYED_URL = 'https://new-code-collab-4.onrender.com';
+const API_URL =
+  typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')
+    ? LOCAL_URL
+    : DEPLOYED_URL;
 
 export async function runCode(language, code) {
   const response = await axios.post(`${API_URL}/run`, {

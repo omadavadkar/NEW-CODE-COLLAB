@@ -1,6 +1,11 @@
 import { io } from 'socket.io-client';
 
-const BASE_URL = 'https://new-code-collab-4.onrender.com';
+const LOCAL_URL = 'http://127.0.0.1:5000';
+const DEPLOYED_URL = 'https://new-code-collab-4.onrender.com';
+const BASE_URL =
+  typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')
+    ? LOCAL_URL
+    : DEPLOYED_URL;
 
 export function createCollabClient({ roomId, username, handlers }) {
   const socket = io(BASE_URL, {
