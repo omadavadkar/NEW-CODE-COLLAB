@@ -1,6 +1,6 @@
 import { io } from 'socket.io-client';
 
-const BASE_URL = import.meta.env.VITE_API_URL || 'http://127.0.0.1:5000';
+const BASE_URL = 'https://new-code-collab-4.onrender.com';
 
 export function createCollabClient({ roomId, username, handlers }) {
   const socket = io(BASE_URL, {
